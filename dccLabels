@@ -1,0 +1,88 @@
+#!/bin/zsh
+# https://docs.atlassian.com/ConfluenceServer/rest/8.2.2/#api/content/{id}/label
+source dc_lib `basename $0`
+typeset -A commandUsages
+commandUsages+=([count]="Count the number of pages with label. Usage:\n$ac_command %s <labelName>\n")
+commandUsages+=([delete]="Delete a label from all pages. Usage:\n$ac_command %s <labelName>\n")
+
+function ac_Print_Help() {
+  printf "\nHelp for %s commands:\n\n" $ac_command
+  for command commandUsage in ${(kv)commandUsages}; do
+    printf "%s - " $command
+    printf "${commandUsage}\n" ${command}
+  done
+  tabs -15
+  printf "Options:\n"
+  printf "\n%s usage examples:\n" $ac_command
+  tabs -5
+  tabs -8
+}
+
+
+typeset -ir maxResults=25
+typeset -i count
+typeset -i numPages
+
+typeset -i page
+typeset -i startIndex
+
+typeset -a pageIds
+typeset -i pageId
+
+function count() {
+  local local_labelName=$1
+  local local_json_response=`curl -s -X GET --url "${dc_url}content/search?cql=label=${local_labelName}" -H "${aHA_JSON}" -H "${dc_AUTH_B}"`
+  count=`echo ${local_json_response} | jq '.totalSize'`
+  numPages=${count}/${maxResults}
+}
+
+
+case $1 in
+"delete")
+  if [ -z $2 ]; then
+    echo "labelName missing argument"
+    exit
+  else
+    typeset -r labelName=$2
+  fi
+  count $labelName
+  for page in `seq 0 ${numPages}`; do
+    startIndex=${page}*${maxResults}
+    pageIds="${pageIds} "`curl -s -X GET --url "${dc_API_CNFL}content/search?cql=label=${labelName}&start=${startIndex}&limit=${maxResults}" -H "${aHA_JSON}" -H "${dc_AUTH_B}" | jq -r '.results[] | .id'`
+  done
+  for pageId in ${pageIds}; do
+    http_response=`curl -i -s -X DELETE --url "${dc_API_CNFL}content/${pageId}/label?name=${labelName}" -H "${aHA_JSON}" -H "${dc_AUTH_B}"`
+    http_return_code=$(echo $http_response | grep "^HTTP" | awk '{print $2}')
+    if [ $http_return_code -eq 204 ]; then
+      printf "%u,deleted\n" ${pageId}
+      continue
+    fi
+    if [ $http_return_code -ge 400 ]; then
+      echo $http_return_code
+      echo $http_response
+      #json_error_response=`echo $http_response | grep -E "{\"errorMessage"`
+      #printf "%u-%s\n" $http_return_code ${json_error_response} | tee -a ${deleteLogFile}
+      continue
+    fi
+
+  done
+  ;;
+"count")
+  if [ -z $2 ]; then
+    echo "labelName missing argument"
+    exit
+  else
+    typeset -r labelName=$2
+  fi
+  count $labelName
+  echo $count
+  ;;
+
+  "help")
+    ac_Print_Help
+    ;;
+
+  *)
+    ac_Print_Help
+    ;;
+esac

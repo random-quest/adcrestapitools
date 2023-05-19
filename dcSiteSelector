@@ -1,0 +1,70 @@
+#!/bin/zsh
+source dc_lib `basename $0`
+
+typeset -A Array_sitenames
+
+function populate_Array_sitenames() {
+	integer local_Index=0
+	typeset local_Line
+	ls -1 "$dc_tools_configuration_files_dir" | sort | while read local_Line; do
+		if [ ! -z $local_Line ]; then
+			Array_sitenames+=([${local_Index}]=${local_Line})
+			local_Index+=1
+		fi
+	done
+}
+
+populate_Array_sitenames
+
+# no argument
+if [ -z $1 ]; then
+	# enter interactive mode
+	integer -r maxIndex=${#Array_sitenames[@]}-1
+	for index_Sitename in {0..${maxIndex}}; do
+		printf "%2d" ${index_Sitename}
+		if [[ ${dc_ACTIVE_SITE} == ${(v)Array_sitenames[${index_Sitename}]} ]]; then
+			printf "*"
+		else
+			printf " "
+		fi
+		printf "- %s" ${(v)Array_sitenames[${index_Sitename}]}
+		printf "\n"
+	done
+	vared -p "Activate project: " -c temp_User_Response
+	if [[ ${temp_User_Response} =~ '^[0-9]+$' ]]; then
+		if [ $temp_User_Response -le $maxIndex -a $temp_User_Response -ge 0 ]; then
+			echo ${(v)Array_sitenames[${temp_User_Response}]} > $dc_tools_active_site_file
+		else
+			echo "Nothing changed"
+			exit
+		fi
+	fi
+	unset temp_User_Response
+	dc_lib env
+	exit
+fi
+
+# argument given
+case $1 in
+"help")
+  printf "\nHelp for %s commands:\n\n" $(basename "$0")
+  printf "%s\t\t\tinteractive mode\n" $(basename "$0")
+  printf "%s <siteName>\tmakes <siteName> the active site\n" $(basename "$0")
+  ;;
+ *)
+	for sitename in ${(v)Array_sitenames}; do
+		if [[ $1 == ${sitename} ]]; then
+			echo $1 > $HOME/conf/DC_active_site
+			dc_lib env
+			exit
+		fi
+	done
+	if [ ! -f $HOME/conf/DC_sites/$1 ]; then
+		vared -p "Do want to create a new site definition file '$1'? (y/Y) " -c temp_User_Response
+		if [[ ${temp_User_Response} == [Yy]* ]]; then 
+			printf "BaseURL_CNFL,<URL>,<PAT>\nBaseURL_JIRA,<URL>,<PAT>\n" > $HOME/conf/DC_sites/$1
+			echo "created file ${HOME}/conf/DC_sites/${1}"
+		fi
+		unset temp_User_Response
+	fi
+esac

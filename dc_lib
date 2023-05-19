@@ -1,0 +1,97 @@
+#!/bin/zsh
+# info
+function fix_BaseURL() {
+  if [ -z $1 ]; then
+    return 
+  fi
+  if [[ ${1:${#1}-1:1} != "/" ]]; then
+    echo "$1/"
+  else
+    echo "$1"
+  fi 
+}
+
+# function verify_API_access() {
+#   typeset local_http_return_code=`curl -i -s -X GET --url "${dc_API_JIRA}serverInfo" -H ${ac_AUTH} -H ${aHA_JSON} | grep "^HTTP" | awk '{print $2}'`
+#     if [ ${http_return_code} -eq 200 ]; then
+#       return 0
+#     else
+#       return 1
+#     fi
+# }
+
+typeset -r dc_command=$1
+typeset -r dc_tools_app_name="adcrestapitools"
+typeset -r dc_tools_configuration_dir="$HOME/.$dc_tools_app_name/"
+typeset -r dc_tools_active_site_file="$dc_tools_configuration_dir/dc_active_site"
+typeset -r dc_tools_configuration_files_dir="$dc_tools_configuration_dir/dc_sites"
+
+if [ ! -d $dc_tools_configuration_dir ]; then
+  printf "New deployment. Creating configuration directory: \"%s\".\n" $dc_tools_configuration_dir
+  mkdir -p $dc_tools_configuration_files_dir
+  printf "BaseURL_CNFL,<BaseURL>,<PAT>\nBaseURL_JIRA,<BaseURL>,<PAT>\n" > $dc_tools_configuration_files_dir/template
+  printf "template\n" > $dc_tools_active_site_file
+fi
+
+if [ ! -f $dc_tools_active_site_file ]; then
+  printf "No active site found in %s\n" %s
+  return
+else
+  typeset -r dc_ACTIVE_SITE="`cat $dc_tools_active_site_file`"
+fi
+
+typeset -r dc_BASE_URL_CNFL=$(fix_BaseURL "`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_CNFL | awk -F ',' '{print$2}'`")
+if [ ! -z $dc_BASE_URL_CNFL ]; then
+  typeset -r dc_PAT_CNFL="`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_CNFL | awk -F ',' '{print$3}'`"
+  typeset -r dc_API_CNFL="${dc_BASE_URL_CNFL}rest/api/"
+  typeset -r aHAB_CNFL="Authorization: Bearer ${dc_PAT_CNFL}"
+fi
+
+typeset -r dc_BASE_URL_JIRA=$(fix_BaseURL "`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_JIRA | awk -F ',' '{print$2}'`")
+if [ ! -z $dc_BASE_URL_JIRA ]; then
+  typeset -r dc_PAT_JIRA="`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_JIRA | awk -F ',' '{print$3}'`"
+  typeset -r dc_API_JIRA="${dc_BASE_URL_JIRA}rest/api/2/"
+  typeset -r aHAB_JIRA="Authorization: Bearer ${dc_PAT_JIRA}"
+fi
+
+# HTTP header constants
+  # accept json
+typeset -r aHA_JSON="Accept: application/json"
+  # content type json
+typeset -r aHCT_JSON="Content-Type: application/json"
+  # content type png
+typeset -r aHCT_PNG="Content-Type: image/png"
+  # x-atlassian 
+typeset -r aHAT_NOC="X-Atlassian-Token: no-check"
+  # x-experimental
+typeset -r aHEX_OPT="X-ExperimentalApi: opt-in"
+# timestamps
+  # date
+typeset -r aTS_DATE="`date +%Y-%m-%d`"
+  # time
+typeset -r aTS_TIME="`date +%H-%M-%S`"
+  # dateTtime
+typeset -r aTS_DATETIME="`date +%Y-%m-%dT%H-%M-%S`"
+
+# Paging Limits
+typeset -Ar dc_LIM=([Min]=1 [Max]=500)
+
+# Confluence DC Constants
+typeset -Ar dcc_SPACE_TYPE=([global]="&type=global" [personal]="&type=personal" [all]="")
+typeset -Ar dcc_SPACE_AVAILABLE_KEYS=([id]="id" [key]="key" [name]="name" [type]="type")
+typeset -Ar dcc_CONTENT_TYPE=([page]="&type=page" [blogpost]="&type=blogpost" [all]="")
+typeset -Ar dcc_CONTENT_STATUS=([current]="&status=current" [trashed]="&status=trashed" [any]="&status=any")
+typeset -Ar dcc_CONTENT_AVAILABLE_KEYS=([id]="id" [status]="status" [title]="title" [type]="type")
+typeset -Ar dcc_ATTACHMENT_AVAILABLE_KEYS=([id]="id" [status]="status" [title]="title" [mediaType]="metadata.mediaType" [fileSize]="extensions.fileSize")
+
+function dc_HTTP_PARSE() {
+  dc_HTTP_RETURN_CODE=`echo $1 | grep "^HTTP" | awk '{print $2}'`
+  dc_JSON_STRING=`echo $1 | sed -ne '/^{/,$ p' | tr -d '\n' | tr -d '\r' | tr -d '\t'`
+}
+
+
+if [[ $1 = "env" ]]; then
+  printf "JIRA URL: %s\n" ${dc_API_JIRA}
+  printf "CNFL URL: %s\n" ${dc_API_CNFL}
+fi
+

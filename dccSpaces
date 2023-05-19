@@ -1,0 +1,185 @@
+#!/bin/zsh
+# https://docs.atlassian.com/ConfluenceServer/rest/8.2.2/#api/space-spaces
+if read -t 0; then
+  while read -t 10 -u 0 line; do
+    dc_STDIN+=("$line")
+  done
+fi
+
+source dc_lib `basename $0`
+typeset -A commandUsages
+commandUsages+=([count]="Count the number of spaces. Usage:\n$dc_command %s [--type <type>]\n")
+commandUsages+=([json]="Retrieve data in json format. Usage:\n$dc_command %s [--type <type>]\n")
+commandUsages+=([csv]="Retrieve data in csv format. Usage:\n$dc_command %s [--type <type>] [--column <key>0...3]\n\tavailable keys: $(printf "(%s)" ${(kj: | :)dcc_SPACE_AVAILABLE_KEYS})\n")
+commandUsages+=([delete]="Delete Space(s). [STDIN spaceKeys]. Usage:\n$ac_command %s --spaceKey <spaceKey n> [-v] \n")
+
+function ac_Print_Help() {
+  printf "\nHelp for %s commands:\n\n" $dc_command
+  for command commandUsage in ${(kv)commandUsages}; do
+    printf "%s - " $command
+    printf "${commandUsage}\n" ${command}
+  done
+  tabs -15
+  printf "Options:\n"
+  printf "  --type\t(%s) [default: all].\n" ${(kj: | :)dcc_SPACE_TYPE}
+  printf "\n%s usage examples:\n" $dc_command
+  tabs -5
+  printf "  o) select by a name\n"
+  printf "\t%s json | jq 'select(.name==\"name\")'\n" $dc_command
+  printf "  o) count elements\n"
+  printf "\t%s json | jq -s '[.][] | length'\n" $dc_command
+  printf "\n"
+  tabs -8
+}
+
+typeset -A lookup_Array_Id_Name
+typeset -A option_Array_Id_Name
+
+function populate_option_Array_Id_Name() {
+  if [ ${#lookup_Array_Id_Name[@]} -eq 0 ]; then
+    # initialize only once
+    lookup_Array_Id_Name=(`dccSpaces csv | sed "s/[\"'<>()&/]//g" | sed "s/ /_/g" | awk -F ',' '{print $2 " " $3}' | tail -n +2`)
+  fi
+  if [ ! -z ${lookup_Array_Id_Name[$1]} ]; then
+    option_Array_Id_Name+=([$1]=${(v)lookup_Array_Id_Name[$1]})
+  else
+    printf "\n%s:\tid %s not valid.\n" ${subCommand} $1
+    exit
+  fi
+}
+
+if [[ ${1:l} == "count" || ${1:l} == "json" || ${1:l} == "csv" ]]; then
+  typeset subCommand=${1:l}
+  shift
+  typeset -a option_type=("--type" "all")
+  zmodload zsh/zutil
+  zparseopts -D -F -K {v,-verbose}=flag_verbose -type:=option_type -column+:=option_column
+  if [ $? -gt 0 ]; then
+    printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+    exit
+  fi
+  # validate options
+  if [ -z  ${(k)dcc_SPACE_TYPE[${option_type[2]}]} ]; then
+    printf "invalid type\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+    printf "  --type\t(%s) [default: all].\n" ${(kj: | :)dcc_SPACE_TYPE}
+    exit
+  fi
+  if [ ${#option_column[@]} -gt 6 ]; then
+    printf "maximum num of --column options exceeded\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+    exit
+  fi
+  for opt column in $option_column; do
+    if [ -z ${(k)dcc_SPACE_AVAILABLE_KEYS[${column}]} ]; then
+      printf "bad column\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      exit
+    else
+      option_column_headers+=",${(k)dcc_SPACE_AVAILABLE_KEYS[${column}]}"
+    fi
+  done
+  # Pre-loop statements
+  case $subCommand in
+    "csv")
+      integer recordCount=0
+      if [ ${#option_column[@]} -eq 0 ]; then
+        printf "spaceId,key,name,type\n"
+      else
+        printf "spaceId%s\n" $option_column_headers
+      fi
+      ;;
+  esac
+  # Main loop
+  #integer -r dc_LIMIT=${(v)dc_LIM[Max]}
+  integer -r dc_LIMIT=5
+  integer dc_STARTINDEX=0
+  integer dc_SIZE=$dc_LIMIT
+  while [ $dc_SIZE -eq $dc_LIMIT ]; do
+    curl_command="curl -i -s -X GET --url \"${dc_API_CNFL}space?limit=${dc_LIMIT}&start=${dc_STARTINDEX}${(v)dcc_SPACE_TYPE[${option_type[2]}]}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+    dc_STARTINDEX+=$dc_LIMIT
+    if [ -v flag_verbose ]; then
+      echo $curl_command
+    fi
+    dc_HTTP_PARSE "`eval $curl_command`"
+    dc_SIZE=`echo ${dc_JSON_STRING} | jq '.size'`
+    case $subCommand in
+      "count")
+        recordCount+=`echo ${dc_JSON_STRING} | jq '.size'`
+        ;;
+      "json")
+        echo $dc_JSON_STRING | jq
+        ;;
+      "csv")
+        if [ ${#option_column[@]} -eq 0 ]; then
+          echo $dc_JSON_STRING | jq -r '.results[] | [ .id, .key, .name, .type ] | @csv'
+        fi
+        if [ ${#option_column[@]} -eq 2 ]; then
+          echo $dc_JSON_STRING | jq -r --arg key1 ${option_column[2]} '.results[] | [ .id, .[$key1] ] | @csv'
+        fi
+        if [ ${#option_column[@]} -eq 4 ]; then
+          echo $dc_JSON_STRING | jq -r --arg key1 ${option_column[2]} --arg key2 ${option_column[4]} '.results[] | [ .id, .[$key1], .[$key2] ] | @csv'
+        fi
+        if [ ${#option_column[@]} -eq 6 ]; then
+          echo $dc_JSON_STRING | jq -r --arg key1 ${option_column[2]} --arg key2 ${option_column[4]} --arg key3 ${option_column[6]} '.results[] | [ .id, .[$key1], .[$key2], .[$key3] ] | @csv'
+        fi
+        ;;
+    esac
+  done
+  # Post-loop statements
+  case $subCommand in
+    "count")
+      printf "%u\n" ${recordCount}
+      ;;
+  esac
+  exit
+fi
+
+case ${1:l} in
+  "delete")
+    subCommand=${1:l}
+    shift
+    zmodload zsh/zutil
+    zparseopts -D -F -K {v,-verbose}=flag_verbose -spaceKey:=option_id
+    if [ $? -gt 0 ]; then
+      printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+    # populate id name array
+    for opt id in $option_id; do
+      populate_option_Array_Id_Name $id
+    done
+    # also check STDIN
+    if [ ! -z $dc_STDIN ]; then
+      for id in $dc_STDIN; do
+        populate_option_Array_Id_Name $id
+      done
+    fi
+    # emtpy option means work all spaces
+    if [ ! -v option_Array_Id_Name ]; then
+      typeset -A option_Array_Id_Name=(`dccSpaces csv | sed "s/[\"'<>()&/]//g" | sed "s/ /_/g" | awk -F ',' '{print $2 " " $3}' | tail -n +2`)
+    fi
+  
+    printf "spaceKey,name,result\n"
+    for Id Name in ${(kv)option_Array_Id_Name}; do
+      #http_response=`curl -i -s -X DELETE --url "${ac_wiki_url}space/${Id}" -u "${ac_user}" -H "${h_a_json}"`
+      #http_return_code=`echo ${http_response} | grep "^HTTP" | awk '{print $2}'`
+      #json_response=`echo $http_response | grep "^{"`
+      printf "%s,%s," ${Id} ${Name}
+      # if [ $http_return_code -eq 202 ]; then
+      #   sleep 1
+      #   async_task_url=`echo ${json_response} | jq -r '.links.status'`
+      #   printf "%s\n" ${async_task_url} >> ${Logfile_AsyncTasks}
+      #   printf "%u\n" `getPercentageCompleteOfDeletionTask ${async_task_url}`
+      # fi
+      # if [ $http_return_code -ge 400 ]; then
+      #   errorMessage=`echo ${json_response} | jq '.data.errors[0].message.translation'`
+      #   printf "%u-%s\n" ${http_return_code} ${errorMessage} | tee -a ${LogFile}
+      # fi
+    done
+    ;;
+  "help")
+    ac_Print_Help
+    ;;
+
+  *)
+    ac_Print_Help
+    ;;
+esac

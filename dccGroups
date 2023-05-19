@@ -1,0 +1,195 @@
+#!/bin/zsh
+# https://docs.atlassian.com/ConfluenceServer/rest/8.2.2/#api/group
+
+source dc_lib `basename $0`
+typeset -A commandUsages
+commandUsages+=([count]="Count the number of groups. Usage:\n$dc_command %s [-v]\n")
+commandUsages+=([json]="Retrieve data in json format. Usage:\n$dc_command %s\n")
+commandUsages+=([csv]="Retrieve data in csv format. Usage:\n$dc_command %s [-v]\n")
+commandUsages+=([users]="Add/remove user(s) to/from a group. Usage:\n$dc_command %s [-v] (add | remove) --group <groupName> --userId <userId> [--userId <userId> n]\n")
+commandUsages+=([getusers]="Get users of a group. Usage:\n$dc_command %s [-v]  --group <groupName>\n")
+commandUsages+=([getgroups]="Get groups of a user. Usage:\n$dc_command %s [-v]  --userId <userId>\n")
+
+function ac_Print_Help() {
+  printf "\nHelp for %s commands:\n\n" $dc_command
+  for command commandUsage in ${(kv)commandUsages}; do
+    printf "%s - " $command
+    printf "${commandUsage}\n" ${command}
+  done
+  tabs -15
+  printf "Options:\n"
+  printf "  -v\tVerbose\n"
+  printf "\n%s usage examples:\n" $dc_command
+  tabs -5
+  printf "\n"
+  tabs -8
+}
+
+if [[ ${1:l} == "count" || ${1:l} == "json" || ${1:l} == "csv" ]]; then
+  typeset subCommand=${1:l}
+  shift
+  zmodload zsh/zutil
+  zparseopts -D -F -K {v,-verbose}=flag_verbose
+  if [ $? -gt 0 ]; then
+    printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+    exit
+  fi
+  # Pre-loop statements
+  integer -r pageIds_size=${#pageIds}
+  integer pageIds_counter=0
+  case $subCommand in
+    "csv")
+      printf "type,name\n"
+      ;;
+    "count")
+      integer recordCount=0
+      ;;
+  esac
+  # Main loop
+  integer -r dc_LIMIT=${(v)dc_LIM[Max]}
+  integer dc_STARTINDEX=0
+  integer dc_SIZE=$dc_LIMIT
+  while [ $dc_SIZE -eq $dc_LIMIT ]; do
+    curl_command="curl -i -s -X GET --url \"${dc_API_CNFL}group?limit=${dc_LIMIT}&start=${dc_STARTINDEX}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+    if [ -v flag_verbose ]; then
+      echo $curl_command
+    fi
+    dc_HTTP_PARSE "`eval $curl_command`"
+    dc_SIZE=`echo ${dc_JSON_STRING} | jq '.size'`
+    case $subCommand in
+      "count")
+        recordCount+=`echo ${dc_JSON_STRING} | jq '.size'`
+        ;;
+      "json")
+        echo $dc_JSON_STRING | jq '.results[]'
+        ;;
+      "csv")
+        echo $dc_JSON_STRING | jq -r '.results[] | [ .type, .name ] | @csv'
+        ;;
+    esac
+    dc_STARTINDEX+=$dc_LIMIT
+  done
+  # Post-loop statements
+  case $subCommand in
+    "count")
+      printf "%u\n" $recordCount
+      ;;
+  esac
+  exit
+fi
+
+case ${1:l} in
+  "users")
+    subCommand=${1:l}
+    shift
+    case ${1:l} in
+      "add")
+        ;;
+      "remove")
+        ;;
+      *)
+        printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}  
+        exit
+        ;;
+    esac
+    subsubCommand=${1:l}
+    shift
+    zmodload zsh/zutil
+    zparseopts -D -F -K {v,-verbose}=flag_verbose -group:=option_id -userId+:=option_userId
+    if [ $? -gt 0 ]; then
+      printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+    # populate array
+    typeset -a userIds
+    for opt id in $option_userId; do
+      userIds+=("${id}")
+    done
+    if [ -z $option_id[2] ]; then
+      printf "--group option is mandatory\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      exit
+    fi    
+    if [ ${#userIds} -eq 0 ]; then
+      printf "--userId option is mandatory\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+    printf "group,userId,result\n"
+    for Id in ${userIds}; do
+      case $subsubCommand in
+        "add")
+          # https://docs.atlassian.com/ConfluenceServer/rest/8.2.2/#api/user/{username}/group/{groupName}
+          curl_command="curl -i -s -X PUT --url \"${dc_API_CNFL}user/${Id}/group/${option_id[2]}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+          ;;
+        "remove")
+          curl_command="curl -i -s -X DELETE --url \"${dc_API_CNFL}user/${Id}/group/${option_id[2]}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+          ;;
+      esac
+      if [ -v flag_verbose ]; then
+        echo $curl_command
+      fi
+      dc_HTTP_PARSE "`eval $curl_command`"
+      if [ $dc_HTTP_RETURN_CODE -eq 204 ]; then
+        case $subsubCommand in
+          "add")
+            http_response="added"
+            ;;
+          "remove")
+            http_response="removed"
+            ;;
+        esac
+      else
+        http_response=$dc_HTTP_RETURN_CODE
+      fi
+      printf "%u,%s,%s\n" $Id ${option_id[2]} $http_response
+    done
+    ;;
+  "getusers")
+    subCommand=${1:l}
+    shift
+    zmodload zsh/zutil
+    zparseopts -D -F -K {v,-verbose}=flag_verbose -group:=option_id
+    if [ $? -gt 0 ]; then
+      printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+    if [ -z $option_id[2] ]; then
+      printf "--group option is mandatory\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      exit
+    fi    
+    printf "group,userId\n"
+    curl_command="curl -i -s -X GET --url \"${dc_API_CNFL}group/${option_id[2]}/member?limit=${dc_LIMIT}&start=${dc_STARTINDEX}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+    if [ -v flag_verbose ]; then
+      echo $curl_command
+    fi
+    dc_HTTP_PARSE "`eval $curl_command`"
+    echo $dc_JSON_STRING | jq -r --arg group ${option_id[2]} '.results[] | [ $group, .username ] | @csv'
+    ;;
+  "getgroups")
+    subCommand=${1:l}
+    shift
+    zmodload zsh/zutil
+    zparseopts -D -F -K {v,-verbose}=flag_verbose -userId:=option_id
+    if [ $? -gt 0 ]; then
+      printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+    if [ -z $option_id[2] ]; then
+      printf "--userId option is mandatory\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      exit
+    fi    
+    printf "userId,group\n"
+    curl_command="curl -i -s -X GET --url \"${dc_API_CNFL}user/memberof?username=${option_id[2]}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+    if [ -v flag_verbose ]; then
+      echo $curl_command
+    fi
+    dc_HTTP_PARSE "`eval $curl_command`"
+    echo $dc_JSON_STRING | jq -r --arg userId ${option_id[2]} '.results[] | [ $userId, .name ] | @csv'
+    ;;
+  "help")
+    ac_Print_Help
+    ;;
+
+  *)
+    ac_Print_Help
+    ;;
+esac

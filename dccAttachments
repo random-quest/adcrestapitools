@@ -1,0 +1,287 @@
+#!/bin/zsh
+# https://docs.atlassian.com/ConfluenceServer/rest/8.2.2/#api/content/{id}/child/attachment
+# Download all attachments for a site
+# dccSpaces csv | xsv select 2 | tail -n +2 | dccContents csv | xsv select 2 | tail -n +2 | dccAttachments download
+# search files with 0 bytes
+## xsv search -s 5 "^[0]$" $downloadLogFile
+# search where curl exit code is not 0
+## xsv search -v -s 1 "^[0]$" $downloadLogFile
+
+if read -t 0; then
+  while read -t 30 -u 0 line; do
+    dc_STDIN+=("$line")
+  done
+fi
+
+
+source dc_lib `basename $0`
+typeset -A commandUsages
+commandUsages+=([count]="Count the number of attachments. Usage:\n$dc_command %s [-v] [--pageId <pageId> n]\n")
+commandUsages+=([json]="Retrieve data in json format. Usage:\n$dc_command %s [-v] [--pageId <pageId> n]\n")
+commandUsages+=([csv]="Retrieve data in csv format. Usage:\n$dc_command %s [-v] [--pageId <pageId> n] [--column <key>0...3]\n\tavailable keys: $(printf "(%s)" ${(kj: | :)dcc_ATTACHMENTS_AVAILABLE_KEYS})\n")
+commandUsages+=([download]="Download attachment. Usage:\n$dc_command %s [-v] [--pageId <pageId> n]\n")
+commandUsages+=([showpath]="Shows relative path from confluence home to attachment file. Usage:\n$dc_command %s --attachmentId <attachmentId>\n")
+commandUsages+=([delete]="Delete attachments. [STDIN attachmentId]. Usage:\n$ac_command %s [-v] [--attachmentId <attachmentId> n] [--status <status>]\n")
+
+function ac_Print_Help() {
+  printf "\nHelp for %s commands:\n\n" $dc_command
+  for command commandUsage in ${(kv)commandUsages}; do
+    printf "%s - " $command
+    printf "${commandUsage}\n" ${command}
+  done
+  tabs -15
+  printf "Options:\n"
+  printf "  --type\t(%s) [default: all].\n" ${(kj: | :)dcc_CONTENT_TYPE}
+  printf "  --status\t(%s) [default: current].\n" ${(kj: | :)dcc_CONTENT_STATUS}
+  printf "\n%s usage examples:\n" $dc_command
+  tabs -5
+  printf "  o) select by a name\n"
+  printf "\t%s json | jq 'select(.name==\"name\")'\n" $dc_command
+  printf "  o) count elements\n"
+  printf "\t%s json | jq -s '[.][] | length'\n" $dc_command
+  printf "\n"
+  tabs -8
+}
+
+if [[ ${1:l} == "count" || ${1:l} == "json" || ${1:l} == "csv" || ${1:l} == "download" ]]; then
+  typeset subCommand=${1:l}
+  shift
+  zmodload zsh/zutil
+  zparseopts -D -F -K {v,-verbose}=flag_verbose -column+:=option_column -pageId+:=option_id
+  if [ $? -gt 0 ]; then
+    printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+    exit
+  fi
+  # populate array
+  typeset -a pageIds
+  for opt id in $option_id; do
+    pageIds+=("${id}")
+  done
+   # also check STDIN
+  if [ -v dc_STDIN ]; then
+    for id in $dc_STDIN; do
+      pageIds+=("${id}")
+    done
+  fi
+  if [ ${#pageIds} -eq 0 ]; then
+    printf "--pageId option is mandatory\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+    exit
+  fi
+  if [ ${#option_column[@]} -gt 6 ]; then
+    printf "maximum num of --column options exceeded\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+    exit
+  fi
+  for opt column in $option_column; do
+    if [ -z ${(k)dcc_ATTACHMENT_AVAILABLE_KEYS[${column}]} ]; then
+      printf "bad column\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      exit
+    else
+      option_column_headers+=",${(k)dcc_SPACE_AVAILABLE_KEYS[${column}]}"
+    fi
+  done
+  # Pre-loop statements
+  integer -r pageIds_size=${#pageIds}
+  integer pageIds_counter=0
+  case $subCommand in
+    "csv")
+      if [ ${#option_column[@]} -eq 0 ]; then
+        printf "pageId,attachmentId,status,title,mediaType,fileSize\n"
+      else
+        printf "pageId,attachmentId%s\n" $option_column_headers
+      fi
+      ;;
+    "count")
+      integer recordCount=0
+      integer sum_recordCount=0
+      printf "pageId,count\n"
+      ;;
+    "download")
+      typeset -a download_links
+      typeset -a download_filenames
+      integer pageIds_counter=0
+      integer pageIds_counter_mod100=0
+      printf "Fetching download_links "
+  esac
+  # Main loop
+  integer -r dc_LIMIT=${(v)dc_LIM[Max]}
+  for Id in ${pageIds}; do
+    integer dc_STARTINDEX=0
+    integer dc_SIZE=$dc_LIMIT
+    while [ $dc_SIZE -eq $dc_LIMIT ]; do
+      curl_command="curl -i -s -X GET --url \"${dc_API_CNFL}content/${Id}/child/attachment?limit=${dc_LIMIT}&start=${dc_STARTINDEX}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+      if [ -v flag_verbose ]; then
+        echo $curl_command
+      fi
+      dc_HTTP_PARSE "`eval $curl_command`"
+      dc_SIZE=`echo ${dc_JSON_STRING} | jq '.size'`
+      case $subCommand in
+        "count")
+          recordCount+=`echo ${dc_JSON_STRING} | jq '.size'`
+          ;;
+        "json")
+          echo $dc_JSON_STRING | jq
+          ;;
+        "csv")
+          if [ ${#option_column[@]} -eq 0 ]; then
+            echo $dc_JSON_STRING | jq -r --arg pageId ${Id} '.results[] | [ $pageId, .id, .status, .title, .metadata.mediaType, .extensions.fileSize ] | @csv'
+          fi
+          if [ ${#option_column[@]} -eq 2 ]; then
+            echo $dc_JSON_STRING | jq -r --arg key1 ${option_column[2]} '.results[] | [ .id, .[$key1] ] | @csv'
+          fi
+          if [ ${#option_column[@]} -eq 4 ]; then
+            echo $dc_JSON_STRING | jq -r --arg key1 ${option_column[2]} --arg key2 ${option_column[4]} '.results[] | [ .id, .[$key1], .[$key2] ] | @csv'
+          fi
+          if [ ${#option_column[@]} -eq 6 ]; then
+            echo $dc_JSON_STRING | jq -r --arg key1 ${option_column[2]} --arg key2 ${option_column[4]} --arg key3 ${option_column[6]} '.results[] | [ .id, .[$key1], .[$key2], .[$key3] ] | @csv'
+          fi
+          ;;
+        "download")
+          download_links+=(`echo $dc_JSON_STRING | jq -r '.results[] | .id, ._links.download' | tr '\n' ' '`)
+          # progress bar
+          pageIds_counter+=1
+          if [ $pageIds_size -gt 100 ]; then
+            pageIds_counter_mod100=`expr $pageIds_counter % 100`
+            if [ $pageIds_counter_mod100 -eq 0 ]; then
+              printf "."
+            fi
+          fi
+          ;;
+      esac
+      dc_STARTINDEX+=$dc_LIMIT
+    done
+    case $subCommand in
+      "count")
+        if [ $recordCount -gt 0 ]; then
+          printf "%s,%u\n" $Id $recordCount
+          sum_recordCount+=$recordCount
+          recordCount=0
+        fi
+      ;;
+    esac
+  done
+  # Post-loop statements
+  case $subCommand in
+    "count")
+      printf ",%u\n" $sum_recordCount
+      ;;
+    "download")
+      printf "done.\n"
+      pageIds_counter=0
+      integer curl_exit_code
+      integer filesize
+      typeset -r downloadLogFile="dccAttachments_DownloadLog_${aTS_DATE}T${aTS_TIME}.csv"
+      printf "curl_exit_code,pageId,attachmentId,filename,filesize\n" $curl_exit_code $pageId $filename $filesize | tee -a $downloadLogFile
+      for array_index in `seq 1 2 ${#download_links}`; do
+        attachmentId=${download_links[$array_index]}
+        download_link=${download_links[$array_index+1]}
+        # perl decodes URL-encoded string: + to space, and hex %XX to ASCII
+        filename=`echo $download_link | awk -F '/' '{print $5}' | awk -F '?' '{print $1}' | perl -pe 's/\+/ /g; s/%([0-9a-f]{2})/chr(hex($1))/eig'`
+        pageId=`echo $download_link | awk -F '/' '{print $4}'`
+        if [ ! -d $pageId ]; then
+          mkdir ${pageId}
+        fi
+        curl_command="curl -o \"${pageId}/${filename}\" --url \"https://owi.ee:9443${download_link}\" -H \"${aHAB_CNFL}\" 2>&1 /dev/null"
+        if [ -v flag_verbose ]; then
+         echo $curl_command
+        fi
+        dc_HTTP_PARSE "`eval $curl_command`"
+        curl_exit_code=`echo $?`
+        filesize=`wc -c "${pageId}/${filename}" | awk '{print $1}'`
+        printf "%u,%s,%s,\"%s\",%u\n" $curl_exit_code $pageId $attachmentId $filename $filesize | tee -a $downloadLogFile
+      done
+      integer download_stat_num_unsuccessful=`xsv search -v -s 1 "^[0]$" ${downloadLogFile} | wc -l`
+      download_stat_num_unsuccessful=$((download_stat_num_unsuccessful-1))
+      integer download_stat_num_empty_file=`xsv search -s 5 "^[0]$" ${downloadLogFile} | wc -l`
+      download_stat_num_empty_file=$((download_stat_num_empty_file-1))
+      integer -r download_stat_total_num_files=`expr ${#download_links} / 2`
+      integer -r download_stat_total_num_files_success=`expr $download_stat_total_num_files - $download_stat_num_empty_file`
+      integer -r download_stat_total_score=`expr $download_stat_total_num_files_success / $download_stat_total_num_files \* 100`
+      printf "Total bad downloads:\t%5u\nTotal empty files:\t%5u\nThe download score is:\t%5u%%\n" $download_stat_num_unsuccessful $download_stat_num_empty_file $download_stat_total_score
+      ;;
+  esac
+  exit
+fi
+
+case ${1:l} in
+  "delete")
+    subCommand=${1:l}
+    shift
+    typeset -a option_status=("--status" "current")
+    zmodload zsh/zutil
+    zparseopts -D -F -K {v,-verbose}=flag_verbose -pageId+:=option_id -status:=option_status
+    if [ $? -gt 0 ]; then
+      printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+    # validate options_type
+    if [ -z  ${(k)dcc_CONTENT_STATUS[${option_status[2]}]} ]; then
+      printf "invalid status\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      printf "  --status\t(%s) [default: current].\n" ${(kj: | :)dcc_CONTENT_STATUS}
+      exit
+    fi
+    # populate array
+    typeset -a pageIds
+    for opt id in $option_id; do
+      pageIds+=("${id}")
+    done
+     # also check STDIN
+    if [ ! -z $dc_STDIN ]; then
+      for id in $dc_STDIN; do
+        pageIds+=("${id}")
+      done
+    fi
+    if [ ${#pageIds} -eq 0 ]; then
+      printf "--pageId option is mandatory\n${commandUsages[${subCommand}]}" ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+
+    printf "pageId,title,result\n"
+    for Id in ${pageIds}; do
+      curl_command="curl -i -s -X GET --url \"${dc_API_CNFL}content/${Id}?${(v)dcc_CONTENT_STATUS[${option_status[2]}]}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+      if [ -v flag_verbose ]; then
+        echo $curl_command
+      fi      
+      dc_HTTP_PARSE "`eval $curl_command`"
+      title=`echo $dc_JSON_STRING | jq -r '.title'`
+      curl_command="curl -i -s -X DELETE --url \"${dc_API_CNFL}content/${Id}?${(v)dcc_CONTENT_STATUS[${option_status[2]}]}\" -H \"${aHA_JSON}\" -H \"${aHAB_CNFL}\""
+      if [ -v flag_verbose ]; then
+        echo $curl_command
+      fi
+      dc_HTTP_PARSE "`eval $curl_command`"
+      if [ $dc_HTTP_RETURN_CODE -eq 204 ]; then
+        case ${(k)dcc_CONTENT_STATUS[${option_status[2]}]} in
+          "current")
+            http_response="trashed"
+            ;;
+          "trashed")
+            http_response="purged"
+            ;;
+        esac
+      else
+        http_response=$dc_HTTP_RETURN_CODE
+      fi
+      printf "%u,%s,%s\n" $Id $title $http_response
+    done
+    ;;
+  "showpath")
+    subCommand=${1:l}
+    shift
+    zmodload zsh/zutil
+    zparseopts -D -F -K -attachmentId+:=option_id
+    if [ $? -gt 0 ]; then
+      printf ${commandUsages[${subCommand}]} ${(k)commandUsages[${subCommand}]}
+      exit
+    fi
+    seed=$((option_id[2] % 65535))
+    level2=$((seed % 256))
+    level3=$((seed / 256))
+    printf "attachments/v4/%s/%s/%s/%s.1\n" $level2 $level3 $option_id[2] $option_id[2]
+    ;;
+  "help")
+    ac_Print_Help
+    ;;
+
+  *)
+    ac_Print_Help
+    ;;
+esac
