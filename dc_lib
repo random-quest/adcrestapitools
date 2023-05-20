@@ -1,6 +1,33 @@
 #!/bin/zsh
-# info
-function fix_BaseURL() {
+
+function check_run_requirements() {
+  integer zsh_minor_version=`zsh --version | awk '{print $2}' | awk -F '.' '{print $2}'`
+  if [ ! $zsh_minor_version -gt 5 ]; then
+    echo "check_run_requirements() failed: zsh minor version must be greater than 5."
+    exit
+  fi
+
+  eval "command -v jq" > /dev/null
+  if [ $? -ne 0 ]; then
+    echo "check_run_requirements() failed: jq not found."
+    exit
+  fi
+
+  eval "command -v xsv" > /dev/null
+  if [ $? -ne 0 ]; then
+    echo "check_run_requirements() failed: xsv not found (https://github.com/BurntSushi/xsv)."
+    exit
+  fi
+
+  eval "sed --version | head -1 | grep -i GNU > /dev/null"
+  if [ $? -ne 0 ]; then
+    echo "check_run_requirements() warning: GNU sed is required, in some cases."
+  fi
+}
+
+check_run_requirements
+
+function check_dc_BASE_URL_string() {
   if [ -z $1 ]; then
     return 
   fi
@@ -40,14 +67,14 @@ else
   typeset -r dc_ACTIVE_SITE="`cat $dc_tools_active_site_file`"
 fi
 
-typeset -r dc_BASE_URL_CNFL=$(fix_BaseURL "`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_CNFL | awk -F ',' '{print$2}'`")
+typeset -r dc_BASE_URL_CNFL=$(check_dc_BASE_URL_string "`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_CNFL | awk -F ',' '{print$2}'`")
 if [ ! -z $dc_BASE_URL_CNFL ]; then
   typeset -r dc_PAT_CNFL="`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_CNFL | awk -F ',' '{print$3}'`"
   typeset -r dc_API_CNFL="${dc_BASE_URL_CNFL}rest/api/"
   typeset -r aHAB_CNFL="Authorization: Bearer ${dc_PAT_CNFL}"
 fi
 
-typeset -r dc_BASE_URL_JIRA=$(fix_BaseURL "`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_JIRA | awk -F ',' '{print$2}'`")
+typeset -r dc_BASE_URL_JIRA=$(check_dc_BASE_URL_string "`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_JIRA | awk -F ',' '{print$2}'`")
 if [ ! -z $dc_BASE_URL_JIRA ]; then
   typeset -r dc_PAT_JIRA="`cat ${dc_tools_configuration_files_dir}/${dc_ACTIVE_SITE} | grep BaseURL_JIRA | awk -F ',' '{print$3}'`"
   typeset -r dc_API_JIRA="${dc_BASE_URL_JIRA}rest/api/2/"
