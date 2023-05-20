@@ -1,0 +1,32 @@
+#!/bin/bash
+# md5checksum_checker.sh
+
+if [ -z "$1" ]; then
+  echo "No argument supplied"
+  exit 1
+fi
+if [ ! -f "$1" ]; then
+    echo "$1 does not exist."
+    exit 1
+fi
+if [ -z "$2" ]; then
+    echo "No checksum in argument"
+    exit 1
+fi
+cat > /tmp/md5checksum.tmp <<EOF
+$2
+EOF
+
+
+md5 $1 | awk '{print $NF}' | diff /tmp/md5checksum.tmp - > /tmp/md5checksum_result.tmp
+
+
+if ! [ -s "/tmp/md5checksum_result.tmp" ]; then
+  echo "SUCCESS"
+  exit 0
+else
+  echo "WARNING - CHECKSUM MISMATCH"
+  cat /tmp/md5checksum_result.tmp
+  exit 2
+fi
+
