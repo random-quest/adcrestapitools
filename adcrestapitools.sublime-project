@@ -1,0 +1,15 @@
+{
+    "folders":
+    [
+        {
+            "path": ".",
+            "name": "adcrestapitools",
+            "file_include_patterns": ["dc*","README.md"],
+            "file_exclude_patterns": ["LICENSE", "*sublime-project"],
+        }
+    ],
+    "settings":
+    {
+        "tab_size": 2,
+    },
+}
