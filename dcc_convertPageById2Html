@@ -1,0 +1,16 @@
+#!/bin/bash
+# FIXME see reference acDClabels.sh
+if [ $# -lt 2 ]; then
+  printf 'Argument missing (provided %u)\nUsage: %s <configurationFile> <pageId>\n' "$#" "$(basename "$0")" >&2; exit 0
+fi
+SELF=`basename $0 | awk -F '.' '{print $1}'`
+DATETIME="`date +%Y-%m-%d`"
+PAT="`cat $HOME/conf/DC_sites/$1 | grep PAT | awk -F '=' '{print$2}'`"
+BASEURL="`cat $HOME/conf/$1 | grep BaseURL | awk -F '=' '{print$2}'`"
+ACCEPT="Accept: application/json"
+AUTH="Authorization: Bearer $PAT"
+RESTURL=$BASEURL/rest/api/
+
+PAGE_NAME=`curl --silent --request GET --url "${RESTURL}content/$2" --header "$ACCEPT" --header "$AUTH" | jq -r '"\(.title).\(.id)"'` 
+
+curl --silent --request GET --url "${RESTURL}content/$2?expand=body.styled_view" --header "$ACCEPT" --header "$AUTH" | jq -r '.body.styled_view.value' > `date +%Y-%m-%d`.${PAGE_NAME}.html
